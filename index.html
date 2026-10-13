@@ -1365,6 +1365,9 @@ const ITEMS = [
 
 </script>
 <script>
+// Instructor results sheet: paste the Google Apps Script web app address here to send each completed attempt to your Google Sheet ('' = off)
+var SHEET_URL='https://script.google.com/macros/s/AKfycbyd4L9pNhjmjpcVNdkmjlAKOnOLnP8FNZdmoNHnRg4-zQs-AsPbhZWmoGU6_H9u2kgk/exec';
+
 // ======================= App =======================
 const MONCOL={baseline:'#F1F5F7',epilepsy:'#F06A5E',schizophrenia:'#B08AEB',autism:'#5BA7E8',depression:'#C79875',adhd:'#F2A447',alzheimers:'#4FC283'};
 const $=id=>document.getElementById(id);
@@ -2541,6 +2544,27 @@ class MiniPDF{
 
 
 
+// ---------- instructor results sheet: one row per completed attempt, sent to the instructor's Google Sheet (only when SHEET_URL is set)
+function sheetWho(){const sw=lsGet('mindpong_student_v1');if(sw&&sw.first&&sw.last&&sw.email)return sw;try{const w=studentDetailsQuiet();if(w)return w;}catch(e){}return sw||{};}
+function sheetPrefill(){if(!SHEET_URL)return;const sw=lsGet('mindpong_student_v1');if(!sw)return;const set=(id,v)=>{const el=$(id);if(el&&!el.value&&v)el.value=v;};
+  set('qFirst',sw.first);set('qLast',sw.last);set('qEmail',sw.email);if(sw.middle&&sw.middle!=='None')set('qMiddle',sw.middle);else if(sw.middle==='None'&&$('qNoMiddle')&&!$('qMiddle').value){$('qNoMiddle').checked=true;$('qMiddle').disabled=true;}}
+function sheetRow(d,type){const w=sheetWho(),name=[w.first,w.middle&&w.middle!=='None'?w.middle:'',w.last].filter(Boolean).join(' ')||'(not given)',sp=scoreParts(d),vi=verInfo(d,name);
+  const H=ATT.history.filter(x=>x.total),ps=H.map(x=>attPct(x)),av=ps.length?ps.reduce((a,b)=>a+b,0)/ps.length:100*d.correct/d.total;
+  const A=achAnalyze(d.items||{},100*d.correct/d.total),mn=ms=>ms===null||ms===undefined?'':(ms/60000).toFixed(1);
+  const row={'Row type':type,'Name':name,'Email':w.email||'','Attempt':d.attempt,'Started':d.startedAt||'','Completed':d.completedAt,'Time zone':d.tz||'',
+    'Active minutes':mn(d.activeMs),'Times paused':(d.pauses||[]).length,'Paused minutes':mn(d.pausedMs),'Correct':d.correct,'Total':d.total,'Percent':(100*d.correct/d.total).toFixed(1),
+    'Bonus points':sp.bonus||0,'Percent with bonus':(100*(sp.bonus?sp.withB:d.correct)/d.total).toFixed(1),'Level (this attempt)':achLevel(100*d.correct/d.total)[1],
+    'Completed attempts':H.length,'Average of attempts (%)':av.toFixed(1),'Overall level':achLevel(av)[1],'Timed-out questions':Object.values(d.items||{}).filter(x=>x.r==='T').length};
+  DEMO_FIELDS.forEach(f=>row[f.label]=demoVal(f)||'');row['Consent given']=DEMO.consentAt||'';
+  (A.rn||[]).forEach(x=>row['RN: '+x.k+' (%)']=x.pct.toFixed(0));(A.pn||[]).forEach(x=>row['PN: '+x.k+' (%)']=x.pct.toFixed(0));(A.cj||[]).forEach(x=>row['CJ: '+x.k+' (%)']=x.pct.toFixed(0));
+  row['Verification code']=vi.code;row['Verification line']=vi.line;row['Page']=location.href.split('#')[0];return row;}
+function sheetQueue(d,type){if(!SHEET_URL||!d)return;let box=lsGet('mindpong_outbox_v1')||[];const row=sheetRow(d,type||'Attempt completed');
+  box=box.filter(x=>!(x.row['Verification code']===row['Verification code']&&x.row['Row type']===row['Row type']));box.push({row,tries:0,sent:false});lsSet('mindpong_outbox_v1',box.slice(-30));sheetFlush();}
+var sheetBusy=false;
+async function sheetFlush(){if(!SHEET_URL||sheetBusy)return;let box=lsGet('mindpong_outbox_v1')||[];if(!box.some(x=>!x.sent))return;sheetBusy=true;
+  for(const it of box){if(it.sent||it.tries>=8)continue;it.tries++;
+    try{await fetch(SHEET_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({app:'MindPong',v:1,row:it.row})});it.sent=true;it.sentAt=new Date().toISOString();}catch(e){}}
+  lsSet('mindpong_outbox_v1',box);sheetBusy=false;}
 // ---------- results card: a verified score summary students can copy or screenshot when downloads are blocked
 function rcText(){if(!curDone)return null;const who=studentDetails();if(!who)return null;const name=who.full,vi=verInfo(curDone,name),sp=scoreParts(curDone);
   const H=ATT.history.filter(x=>x.total),ps=H.map(x=>attPct(x)),av=ps.length?ps.reduce((a,b)=>a+b,0)/ps.length:100*curDone.correct/curDone.total,lv=achLevel(av);
@@ -2748,7 +2772,7 @@ function noteAnswer(){const n=Object.keys(qAnswered).length;
     const now=Date.now(),m=attMeta||{startedAt:null,pauses:[]},pauses=(m.pauses||[]).map(x=>({at:x.at,res:x.res||null,auto:!!x.auto})),pausedMs=pauses.reduce((t,x)=>t+(x.res?x.res-x.at:0),0),totalMs=m.startedAt?now-m.startedAt:null;
     let tz='';try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||'';}catch(e){}
     curDone={attempt:curAttempt,correct:c,total:BANK.length,pct:Math.round(100*c/BANK.length),completedAt:new Date(now).toISOString(),items,
-      startedAt:m.startedAt?new Date(m.startedAt).toISOString():null,firstUse:FIRST_USE,tz,pauses,pausedMs,totalMs,activeMs:totalMs!==null?totalMs-pausedMs:null};attMeta=null;ATT.history.push(curDone);saveAtt();autoApplyBonus();lsDel(TEST_KEY);testPaused=null;try{localStorage.setItem('mindpong_last_attempt',JSON.stringify({curDone,curAttempt,testOrder,optPerm,qAnswered,qScore}));}catch(e){}}
+      startedAt:m.startedAt?new Date(m.startedAt).toISOString():null,firstUse:FIRST_USE,tz,pauses,pausedMs,totalMs,activeMs:totalMs!==null?totalMs-pausedMs:null};attMeta=null;ATT.history.push(curDone);saveAtt();autoApplyBonus();try{sheetQueue(curDone,'Attempt completed');}catch(e){}lsDel(TEST_KEY);testPaused=null;try{localStorage.setItem('mindpong_last_attempt',JSON.stringify({curDone,curAttempt,testOrder,optPerm,qAnswered,qScore}));}catch(e){}}
   updateGate();updateSlidesGate();if(typeof updateResGate==='function')updateResGate();}
 function ordinal(n){const s=['th','st','nd','rd'],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
 function updateGate(){const n=Object.keys(qAnswered).length,btn=$('qPdf'),done=n===BANK.length;
@@ -2808,7 +2832,7 @@ async function deliverFile(blob,fname,msgEl){const say=t=>{if(msgEl)msgEl.innerH
     setTimeout(()=>URL.revokeObjectURL(url),10*60*1000);}
   return 'fallback';}
 async function saveReport(blob,fname,btn,old){reportMsg('');const r=await deliverFile(blob,fname,$('qPdfMsg'));btn.textContent=r==='saved'?'Report saved':r==='fallback'?'Report ready':old;setTimeout(()=>{btn.textContent=old;},2500);}
-$('qPdf').onclick=downloadReport;$('verBtn').onclick=verCheck;$('rcBtn').onclick=rcShow;$('ipBtn').onclick=ipMake;$('isBtn').onclick=instrSlides;{const f=$('isFold');f.addEventListener('toggle',()=>{f.querySelector('.fold-hint').textContent=f.open?'Hide':'Open';});}{const f=$('ipFold');f.addEventListener('toggle',()=>{f.querySelector('.fold-hint').textContent=f.open?'Hide':'Open';});}$('tfLink').onclick=e=>{e.preventDefault();const t=$('resultsCard');t.scrollIntoView({behavior:'smooth',block:'start'});t.classList.add('tf-hl');setTimeout(()=>t.classList.remove('tf-hl'),2500);};$('verIn').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))verCheck();});{const vf=$('verFold');vf.addEventListener('toggle',()=>{vf.querySelector('.fold-hint').textContent=vf.open?'Hide':'Open';});}renderBank();updateGate();
+$('qPdf').onclick=downloadReport;$('verBtn').onclick=verCheck;$('rcBtn').onclick=rcShow;setTimeout(()=>{try{sheetPrefill();sheetFlush();}catch(e){}},1500);$('ipBtn').onclick=ipMake;$('isBtn').onclick=instrSlides;{const f=$('isFold');f.addEventListener('toggle',()=>{f.querySelector('.fold-hint').textContent=f.open?'Hide':'Open';});}{const f=$('ipFold');f.addEventListener('toggle',()=>{f.querySelector('.fold-hint').textContent=f.open?'Hide':'Open';});}$('tfLink').onclick=e=>{e.preventDefault();const t=$('resultsCard');t.scrollIntoView({behavior:'smooth',block:'start'});t.classList.add('tf-hl');setTimeout(()=>t.classList.remove('tf-hl'),2500);};$('verIn').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))verCheck();});{const vf=$('verFold');vf.addEventListener('toggle',()=>{vf.querySelector('.fold-hint').textContent=vf.open?'Hide':'Open';});}renderBank();updateGate();
 
 // =====================================================================
 // Predict the winner (one-time bonus), save/resume game, pause/resume test, review slides
@@ -2881,18 +2905,20 @@ var DEMO_FIELDS=[
  {k:'school',label:'School or organization',text:true,ph:'Name of your school, college or organization'}];
 var DEMO=lsGet(DEMO_KEY)||{};
 function demoVal(f){const v=DEMO[f.k]||'';return f.other&&v===f.other?(DEMO[f.k+'_other']?f.other.replace(/^Prefer to self-describe$/,'Self-described')+': '+DEMO[f.k+'_other']:v):v;}
-function demoFormHTML(){if(!DEMO_FIELDS)return '';return `<form class="demo" id="demoForm" novalidate><h4>About you (required before you start)</h4>
+function demoFormHTML(){if(!DEMO_FIELDS)return '';const SW=lsGet('mindpong_student_v1')||{};return `<form class="demo" id="demoForm" novalidate><h4>About you (required before you start)</h4>${SHEET_URL?`<div class="demo-grid"><label>First name(s)<input type="text" data-s="first" maxlength="80" autocomplete="given-name" value="${escH(SW.first||'')}"></label><label>Middle name (optional)<input type="text" data-s="middle" maxlength="80" autocomplete="additional-name" value="${escH(SW.middle&&SW.middle!=='None'?SW.middle:'')}"></label><label>Last name<input type="text" data-s="last" maxlength="80" autocomplete="family-name" value="${escH(SW.last||'')}"></label><label>Email<input type="text" inputmode="email" data-s="email" maxlength="120" autocomplete="email" value="${escH(SW.email||'')}"></label></div>`:''}
   <div class="demo-grid">${DEMO_FIELDS.map(f=>f.text?`<label>${f.label}<input type="text" data-k="${f.k}" maxlength="80" placeholder="${escH(f.ph)}" value="${escH(DEMO[f.k]||'')}"></label>`
     :`<label>${f.label}<select data-k="${f.k}"><option value="">Select...</option>${f.opts.map(o=>`<option${DEMO[f.k]===o?' selected':''}>${escH(o)}</option>`).join('')}</select>${f.other?`<input type="text" class="demo-other" data-o="${f.k}" maxlength="60" placeholder="Please specify" value="${escH(DEMO[f.k+'_other']||'')}" ${DEMO[f.k]===f.other?'':'hidden'}>`:''}</label>`).join('')}</div>
-  <label class="demo-consent"><input type="checkbox" id="demoConsent" ${DEMO.consentAt?'checked':''}> I consent to provide this demographic information. I understand it is saved in this browser and is printed, with my name, email, scores and testing times, on the PDF report I download and may submit to my instructor for course evaluation and teaching improvement. I can choose "Prefer not to say" for gender and age.</label>
+  <label class="demo-consent"><input type="checkbox" id="demoConsent" ${DEMO.consentAt?'checked':''}> I consent to provide this demographic information. ${SHEET_URL?'I understand that when I complete an attempt, my name, email, this information, my scores and testing times are sent automatically to my instructor\'s private results spreadsheet for course evaluation and teaching improvement. They are also saved in this browser and printed on my PDF report.':'I understand it is saved in this browser and is printed, with my name, email, scores and testing times, on the PDF report I download and may submit to my instructor for course evaluation and teaching improvement.'} I can choose "Prefer not to say" for gender and age.</label>
   <p class="form-err" id="demoErr" role="alert"></p></form>`;}
 function wireDemo(){if(!DEMO_FIELDS)return;const f=$('demoForm');if(!f)return;f.querySelectorAll('select[data-k]').forEach(s=>s.onchange=()=>{const d=DEMO_FIELDS.find(x=>x.k===s.dataset.k),o=f.querySelector(`[data-o="${s.dataset.k}"]`);if(o)o.hidden=s.value!==d.other;});}
 function demoCollect(){const f=$('demoForm');if(!f)return true;const d={},miss=[];
+  const sw={};if(SHEET_URL){f.querySelectorAll('input[data-s]').forEach(el=>{const k=el.dataset.s,v=el.value.trim();sw[k]=v;el.setAttribute('aria-invalid','false');if(k!=='middle'&&!v){miss.push(k==='first'?'first name':k==='last'?'last name':'email');el.setAttribute('aria-invalid','true');}
+    if(k==='email'&&v&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)){miss.push('a valid email');el.setAttribute('aria-invalid','true');}});}
   DEMO_FIELDS.forEach(x=>{const el=f.querySelector(`[data-k="${x.k}"]`),v=el.value.trim();el.setAttribute('aria-invalid','false');if(!v){miss.push(x.label.toLowerCase());el.setAttribute('aria-invalid','true');}d[x.k]=v;
     if(x.other&&v===x.other){const o=f.querySelector(`[data-o="${x.k}"]`),ov=o.value.trim();if(!ov){miss.push(x.label.toLowerCase()+' (please specify)');o.setAttribute('aria-invalid','true');}d[x.k+'_other']=ov;}});
   if(miss.length){$('demoErr').textContent='Please complete: '+miss.join(', ')+'.';return false;}
   if(!$('demoConsent').checked){$('demoErr').textContent='Please tick the consent box to start the practice test.';$('demoConsent').focus();return false;}
-  d.consentAt=DEMO.consentAt&&$('demoConsent').checked?DEMO.consentAt:new Date().toISOString();d.updatedAt=new Date().toISOString();DEMO=d;lsSet(DEMO_KEY,DEMO);return true;}
+  d.consentAt=DEMO.consentAt&&$('demoConsent').checked?DEMO.consentAt:new Date().toISOString();d.updatedAt=new Date().toISOString();DEMO=d;lsSet(DEMO_KEY,DEMO);if(SHEET_URL){if(!sw.middle)sw.middle='None';lsSet('mindpong_student_v1',sw);sheetPrefill();}return true;}
 function demoCols(){return DEMO_FIELDS.map(f=>demoVal(f)).concat([DEMO.consentAt||'']);}
 var DEMO_HEAD=DEMO_FIELDS.map(f=>f.label).concat(['Demographics consent given (ISO 8601)']);
 function escH(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
@@ -2984,7 +3010,7 @@ function resolvePred(M){if(!pred||pred.resolved||pred.voided||!M.winner)return;
   if(k<SERIES_N){predFlag=`Series: match ${k} of ${SERIES_N} done (${mine}–${k-mine})`;setTimeout(()=>renderPred(),0);return;}
   pred.resolved=true;pred.correct=mine>=SERIES_WIN;pred.careOk=pred.games.every(g=>g.care);pred.careMiss=(pred.games.find(g=>!g.care)||{}).careMiss||'';pred.score=`${mine} of ${SERIES_N} matches`;pred.series=pred.games.map((g,i)=>`match ${i+1}: ${g.w===pred.side?'won':'lost'} ${g.me}–${g.them}`).join('; ');
   pred.winnerTitle=sideTitle(M.winner);M._pred=Object.assign({},pred,{game:k,mine,partial:false,thisWon:M.winner===pred.side});
-  if(pred.correct&&pred.careOk&&reasonOk(pred.reason)&&!BON.earned){BON={earned:true,redeemed:false,pts:BONUS_PTS,predicted:pred.title,reason:pred.reason,score:pred.score,series:pred.series,care:'The indicated care (fitting medication, therapeutic response and all '+EDU_TOPICS.length+' health education topics for each player with a condition) was in place in all '+SERIES_N+' matches.',settings:pred.setting,earnedAt:Date.now(),predictedAt:pred.at};saveBon();M._pred.newBonus=true;if(autoApplyBonus()){try{renderBank();updateGate();}catch(e){}}}
+  if(pred.correct&&pred.careOk&&reasonOk(pred.reason)&&!BON.earned){BON={earned:true,redeemed:false,pts:BONUS_PTS,predicted:pred.title,reason:pred.reason,score:pred.score,series:pred.series,care:'The indicated care (fitting medication, therapeutic response and all '+EDU_TOPICS.length+' health education topics for each player with a condition) was in place in all '+SERIES_N+' matches.',settings:pred.setting,earnedAt:Date.now(),predictedAt:pred.at};saveBon();M._pred.newBonus=true;if(autoApplyBonus()){try{renderBank();updateGate();}catch(e){}try{const f=ATT.history.find(x=>x.bonus);if(f)sheetQueue(f,'Bonus added to first attempt');}catch(e){}}}
   predFlag=pred.correct?(M._pred.newBonus?'Correct! 2 bonus points earned':!pred.careOk&&!BON.earned?'Correct, but no bonus: care incomplete':'Prediction correct'):'Prediction not correct';prepSet('series');
   predLog.unshift(Object.assign({},pred));pred=null;setTimeout(()=>renderPred(),0);}
 function predResultHTML(M){const p=M._pred;if(!p)return '';
